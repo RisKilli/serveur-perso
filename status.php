@@ -1,4 +1,7 @@
 <?php
+
+date_default_timezone_set('Europe/Paris');
+
 function formatBytes($bytes) {
     $units = ['B', 'KB', 'MB', 'GB', 'TB'];
     $i = 0;
