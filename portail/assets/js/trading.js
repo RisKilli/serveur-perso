@@ -9,9 +9,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const resultFilter = document.getElementById('resultFilter');
     const tradedAt = document.getElementById('tradedAt');
 
-    // Pour le prototype, les trades restent seulement dans la page.
-    // L'API et MariaDB remplaceront ce tableau dans une prochaine étape.
-    const trades = [];
+    let trades = [];
 
     function setCurrentTradeDate() {
         const now = new Date();
@@ -23,7 +21,7 @@ document.addEventListener('DOMContentLoaded', () => {
         return new Intl.NumberFormat('fr-FR', {
             style: 'currency',
             currency: 'EUR'
-        }).format(value);
+        }).format(Number(value || 0));
     }
 
     function formatTradeDate(value) {
@@ -34,13 +32,16 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function getResultState(result) {
-        if (result === null) return 'pending';
-        return result >= 0 ? 'gain' : 'loss';
+        if (result === null || result === undefined || result === '') {
+            return 'pending';
+        }
+
+        return Number(result) >= 0 ? 'gain' : 'loss';
     }
 
     function updateSummary() {
-        const gains = trades.filter((trade) => trade.result !== null && trade.result > 0);
-        const total = trades.reduce((sum, trade) => sum + (trade.result ?? 0), 0);
+        const gains = trades.filter((trade) => trade.result !== null && Number(trade.result) > 0);
+        const total = trades.reduce((sum, trade) => sum + Number(trade.result || 0), 0);
 
         totalTrades.textContent = trades.length;
         winningTrades.textContent = gains.length;
@@ -54,7 +55,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         const icon = document.createElement('span');
         icon.setAttribute('aria-hidden', 'true');
-        icon.textContent = '📈';
+        icon.textContent = '';
 
         const title = document.createElement('h3');
         title.textContent = 'Votre journal est prêt';
@@ -75,6 +76,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const matchesAsset = trade.asset.toLowerCase().includes(assetSearch);
             const matchesDirection = !direction || trade.direction === direction;
             const matchesResult = !result || getResultState(trade.result) === result;
+
             return matchesAsset && matchesDirection && matchesResult;
         });
 
@@ -84,6 +86,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const message = trades.length === 0
                 ? 'Ajoutez votre premier trade avec le formulaire.'
                 : 'Aucun trade ne correspond à ces filtres.';
+
             tradesList.append(createEmptyState(message));
             return;
         }
@@ -101,6 +104,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const directionBadge = document.createElement('span');
             directionBadge.className = `trade-badge ${trade.direction}`;
             directionBadge.textContent = trade.direction === 'buy' ? 'Achat' : 'Vente';
+
             header.append(title, directionBadge);
 
             const meta = document.createElement('div');
@@ -112,9 +116,10 @@ document.addEventListener('DOMContentLoaded', () => {
             const resultBadge = document.createElement('strong');
             const resultState = getResultState(trade.result);
             resultBadge.className = `result-badge ${resultState}`;
-            resultBadge.textContent = trade.result === null
+            resultBadge.textContent = resultState === 'pending'
                 ? 'Résultat à renseigner'
                 : formatEuro(trade.result);
+
             meta.append(price, resultBadge);
 
             const date = document.createElement('p');
@@ -130,29 +135,76 @@ document.addEventListener('DOMContentLoaded', () => {
                 item.append(strategy);
             }
 
-            if (trade.screenshotUrl) {
-                const screenshot = document.createElement('img');
-                screenshot.className = 'trade-screenshot';
-                screenshot.src = trade.screenshotUrl;
-                screenshot.alt = `Capture du graphique pour ${trade.asset}`;
-                item.append(screenshot);
+            if (trade.emotions) {
+                const emotions = document.createElement('p');
+                emotions.className = 'trade-item-strategy';
+                emotions.textContent = `Émotions : ${trade.emotions}`;
+                item.append(emotions);
+            }
+
+            if (trade.mistake) {
+                const mistake = document.createElement('p');
+                mistake.className = 'trade-item-strategy';
+                mistake.textContent = `Erreur : ${trade.mistake}`;
+                item.append(mistake);
+            }
+
+            if (trade.lesson) {
+                const lesson = document.createElement('p');
+                lesson.className = 'trade-item-strategy';
+                lesson.textContent = `Leçon : ${trade.lesson}`;
+                item.append(lesson);
             }
 
             tradesList.append(item);
         });
     }
 
-    form.addEventListener('submit', (event) => {
+    async function loadTrades() {
+        try {
+            const response = await fetch('api/trades.php');
+            const data = await response.json();
+
+            if (!response.ok || !data.success) {
+                tradesList.replaceChildren();
+                tradesList.append(createEmptyState(data.message || 'Impossible de charger les trades.'));
+                return;
+            }
+
+            trades = data.trades;
+            updateSummary();
+            renderTrades();
+        } catch (error) {
+            tradesList.replaceChildren();
+            tradesList.append(createEmptyState('Erreur lors du chargement des trades.'));
+        }
+    }
+
+    async function saveTrade(trade) {
+        const response = await fetch('api/trades.php', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify(trade)
+        });
+
+        const data = await response.json();
+
+        if (!response.ok || !data.success) {
+            throw new Error(data.message || 'Erreur lors de l’enregistrement.');
+        }
+
+        return data;
+    }
+
+    form.addEventListener('submit', async (event) => {
         event.preventDefault();
 
         const formData = new FormData(form);
         const resultValue = String(formData.get('result')).trim();
-        const screenshot = formData.get('screenshot');
-        const screenshotUrl = screenshot instanceof File && screenshot.size > 0
-            ? URL.createObjectURL(screenshot)
-            : null;
 
-        trades.unshift({
+        const trade = {
             asset: String(formData.get('asset')).trim(),
             direction: String(formData.get('direction')),
             entryPrice: Number(formData.get('entryPrice')),
@@ -163,14 +215,17 @@ document.addEventListener('DOMContentLoaded', () => {
             emotions: String(formData.get('emotions')).trim(),
             mistake: String(formData.get('mistake')).trim(),
             lesson: String(formData.get('lesson')).trim(),
-            tradedAt: String(formData.get('tradedAt')),
-            screenshotUrl
-        });
+            tradedAt: String(formData.get('tradedAt'))
+        };
 
-        form.reset();
-        setCurrentTradeDate();
-        updateSummary();
-        renderTrades();
+        try {
+            await saveTrade(trade);
+            form.reset();
+            setCurrentTradeDate();
+            await loadTrades();
+        } catch (error) {
+            alert(error.message);
+        }
     });
 
     form.addEventListener('reset', () => {
@@ -183,6 +238,5 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     setCurrentTradeDate();
-    updateSummary();
-    renderTrades();
+    loadTrades();
 });
