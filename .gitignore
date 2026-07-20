@@ -1,2 +1,2 @@
-notes/config.local.php
-.DS_Store
+**/config.local.php
+**/.DS_Store
